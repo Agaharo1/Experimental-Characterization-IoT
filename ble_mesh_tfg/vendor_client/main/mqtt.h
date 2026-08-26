@@ -1,25 +1,22 @@
 #pragma once
-
 #include "esp_err.h"
 #include <stdint.h>
 #include <stdbool.h>
 
-
 esp_err_t mqtt_handler_start(void);
-
 bool mqtt_is_connected(void);
 
-
+// AQUI SE HA MODIFICADO: ACTUALIZACION DE PARAMETROS (pdr y latencia)
 void mqtt_publish_ping_result(uint16_t node_addr,
                                uint16_t received, uint16_t expected,
-                               float loss_pct,
+                               float pdr,
                                int16_t rssi_min, float rssi_avg, int16_t rssi_max,
-                               float snr_estimate_avg);
+                               float snr_estimate_avg, float latencia_avg);
 
-
+// AQUI SE HA MODIFICADO: ACTUALIZACION DE PARAMETROS (pdr y throughput)
 void mqtt_publish_transfer_result(uint16_t node_addr,
                                    uint32_t total_bytes_observed,
                                    uint16_t total_chunks, uint16_t received_chunks,
-                                   uint16_t crc_fail_count, float loss_pct,
+                                   uint16_t crc_fail_count, float pdr,
                                    int16_t rssi_min, float rssi_avg, int16_t rssi_max,
-                                   float snr_estimate_avg);
+                                   float snr_estimate_avg, float throughput_bps);

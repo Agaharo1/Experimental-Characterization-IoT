@@ -1,75 +1,59 @@
-
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
-
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "esp_bt.h"
 #include "esp_timer.h"
-
 #include "esp_ble_mesh_defs.h"
 #include "esp_ble_mesh_common_api.h"
 #include "esp_ble_mesh_networking_api.h"
 #include "esp_ble_mesh_provisioning_api.h"
 #include "esp_ble_mesh_config_model_api.h"
 #include "esp_ble_mesh_local_data_operation_api.h"
-
 #include "ble_mesh_example_init.h"
 
 #define TAG "EXAMPLE_SERVER"
 
 #define CID_ESP      0x02E5
-
-
 #define TARGET_ADDR  0x0001
-
-
 #define APP_KEY_IDX  0x0000
-
 #define MSG_SEND_TTL 3
 #define MSG_TIMEOUT  0
 #define MSG_ROLE     ROLE_NODE
 
-
-#define ESP_BLE_MESH_VND_MODEL_ID_CLIENT    0x0000   
-#define ESP_BLE_MESH_VND_MODEL_ID_SERVER    0x0001   
+#define ESP_BLE_MESH_VND_MODEL_ID_CLIENT    0x0000    
+#define ESP_BLE_MESH_VND_MODEL_ID_SERVER    0x0001    
 
 #define ESP_BLE_MESH_VND_MODEL_OP_PING       ESP_BLE_MESH_MODEL_OP_3(0x01, CID_ESP)
 #define ESP_BLE_MESH_VND_MODEL_OP_PONG       ESP_BLE_MESH_MODEL_OP_3(0x02, CID_ESP)
-
 #define ESP_BLE_MESH_VND_MODEL_OP_DATA_CHUNK ESP_BLE_MESH_MODEL_OP_3(0x03, CID_ESP)
 #define ESP_BLE_MESH_VND_MODEL_OP_DATA_ACK   ESP_BLE_MESH_MODEL_OP_3(0x04, CID_ESP)
 
 typedef struct __attribute__((packed)) {
     uint16_t seq_num;
-    uint16_t total_in_round;  
+    uint16_t total_in_round;      
     int64_t  timestamp;
+    float    last_rtt_ms; // AQUI SE HA MODIFICADO: AÑADIDA LATENCIA AL PAYLOAD
 } ping_payload_t;
 
-
 #define DATA_CHUNK_PAYLOAD_MAX  250
-
 typedef struct __attribute__((packed)) {
-    uint16_t seq_num;                       
-    uint16_t total_chunks;                  
-    uint16_t crc16;                         
+    uint16_t seq_num;                           
+    uint16_t total_chunks;                      
+    uint16_t crc16;                             
     uint8_t  data[DATA_CHUNK_PAYLOAD_MAX];  
 } data_chunk_payload_t;
-
 #define DATA_CHUNK_HEADER_SIZE  (sizeof(uint16_t) * 3)  
 
 typedef struct __attribute__((packed)) {
-    uint16_t seq_num;    
+    uint16_t seq_num;        
     uint8_t  crc_ok;     
 } data_ack_payload_t;
 
-
-static uint16_t crc16_ccitt(const uint8_t *data, size_t len)
-{
+static uint16_t crc16_ccitt(const uint8_t *data, size_t len) {
     uint16_t crc = 0xFFFF;
     for (size_t i = 0; i < len; i++) {
         crc ^= (uint16_t)data[i] << 8;
@@ -81,17 +65,13 @@ static uint16_t crc16_ccitt(const uint8_t *data, size_t len)
 }
 
 #define TOTAL_PING_MESSAGES 50
-
-
 #define DATA_TEST_SIZE_1KB    (1   * 1024)
 #define DATA_TEST_SIZE_10KB   (10  * 1024)
 #define DATA_TEST_SIZE_100KB  (100 * 1024)
 
-
-#define CONTINUOUS_PING_COUNT        5     
-#define CONTINUOUS_DATA_TEST_SIZE    DATA_TEST_SIZE_1KB  
-#define CONTINUOUS_ROUND_INTERVAL_MS 15000  
-
+#define CONTINUOUS_PING_COUNT        5      
+#define CONTINUOUS_DATA_TEST_SIZE    DATA_TEST_SIZE_1KB   
+#define CONTINUOUS_ROUND_INTERVAL_MS 15000   
 
 #define ASSUMED_NOISE_FLOOR_DBM  (-95)
 
@@ -102,30 +82,25 @@ typedef struct {
     uint16_t count;
 } rssi_stats_t;
 
-static void rssi_stats_reset(rssi_stats_t *s)
-{
+static void rssi_stats_reset(rssi_stats_t *s) {
     s->sum = 0;
     s->count = 0;
     s->min = INT16_MAX;
     s->max = INT16_MIN;
 }
 
-static void rssi_stats_add(rssi_stats_t *s, int8_t rssi)
-{
+static void rssi_stats_add(rssi_stats_t *s, int8_t rssi) {
     s->sum += rssi;
     s->count++;
     if (rssi < s->min) s->min = rssi;
     if (rssi > s->max) s->max = rssi;
 }
 
-static float rssi_stats_avg(const rssi_stats_t *s)
-{
+static float rssi_stats_avg(const rssi_stats_t *s) {
     return (s->count > 0) ? ((float)s->sum / s->count) : 0.0f;
 }
 
-
-static void rssi_stats_log(const char *tag_prefix, const rssi_stats_t *s)
-{
+static void rssi_stats_log(const char *tag_prefix, const rssi_stats_t *s) {
     if (s->count == 0) {
         ESP_LOGW(TAG, "%s: sin muestras de RSSI", tag_prefix);
         return;
@@ -139,19 +114,18 @@ static void rssi_stats_log(const char *tag_prefix, const rssi_stats_t *s)
 static uint16_t rx_count = 0;
 static uint16_t lost_count = 0;
 static int64_t  start_test_time = 0;
+
 static TaskHandle_t ping_task_handle = NULL;
-
-
 static uint16_t node_net_idx = 0;
-
 
 static volatile uint16_t last_data_ack_seq = 0;
 static volatile bool     last_data_ack_ok  = false;
 static volatile int8_t   last_data_ack_rssi = 0;
 
-
 static rssi_stats_t ping_rssi_stats;
 static rssi_stats_t data_rssi_stats;
+
+static float s_last_rtt_ms = 0.0f; // AQUI SE HA MODIFICADO: VARIABLE PARA GUARDAR LA LATENCIA
 
 static uint8_t dev_uuid[ESP_BLE_MESH_OCTET16_LEN] = { 0x32, 0x10 };
 
@@ -163,16 +137,15 @@ static esp_ble_mesh_cfg_srv_t config_server = {
 #if defined(CONFIG_BLE_MESH_GATT_PROXY_SERVER)
     .gatt_proxy = ESP_BLE_MESH_GATT_PROXY_ENABLED,
 #else
-    
+    .gatt_proxy = ESP_BLE_MESH_GATT_PROXY_NOT_SUPPORTED,
 #endif
 #if defined(CONFIG_BLE_MESH_FRIEND)
-    
+    .friend_state = ESP_BLE_MESH_FRIEND_ENABLED,
 #else
     .friend_state = ESP_BLE_MESH_FRIEND_NOT_SUPPORTED,
 #endif
     .default_ttl = 7,
 };
-
 
 static const esp_ble_mesh_client_op_pair_t vnd_op_pair[] = {
     { ESP_BLE_MESH_VND_MODEL_OP_PING,       ESP_BLE_MESH_VND_MODEL_OP_PONG },
@@ -183,7 +156,6 @@ static esp_ble_mesh_client_t vendor_client = {
     .op_pair_size = ARRAY_SIZE(vnd_op_pair),
     .op_pair = vnd_op_pair,
 };
-
 
 static esp_ble_mesh_model_op_t vnd_op[] = {
     ESP_BLE_MESH_MODEL_OP(ESP_BLE_MESH_VND_MODEL_OP_PONG, sizeof(ping_payload_t)),
@@ -214,15 +186,12 @@ static esp_ble_mesh_prov_t provision = {
     .uuid = dev_uuid,
 };
 
-
-static void run_data_transfer_test(uint32_t total_bytes, const char *label)
-{
+static void run_data_transfer_test(uint32_t total_bytes, const char *label) {
     uint16_t total_chunks = (uint16_t)((total_bytes + DATA_CHUNK_PAYLOAD_MAX - 1) / DATA_CHUNK_PAYLOAD_MAX);
     uint16_t chunk_lost = 0;
     uint32_t bytes_ok = 0;
-
     uint8_t filler[DATA_CHUNK_PAYLOAD_MAX];
-    memset(filler, 0xAA, sizeof(filler));   
+    memset(filler, 0xAA, sizeof(filler));       
 
     esp_ble_mesh_msg_ctx_t ctx = {
         .net_idx = node_net_idx,
@@ -235,62 +204,67 @@ static void run_data_transfer_test(uint32_t total_bytes, const char *label)
              label, total_bytes, total_chunks);
 
     rssi_stats_reset(&data_rssi_stats);
-
     int64_t start = esp_timer_get_time();
 
-    for (uint16_t i = 1; i <= total_chunks; i++) {
+for (uint16_t i = 1; i <= total_chunks; i++) {
         uint32_t remaining = total_bytes - (uint32_t)(i - 1) * DATA_CHUNK_PAYLOAD_MAX;
         uint16_t chunk_len = (remaining > DATA_CHUNK_PAYLOAD_MAX) ? DATA_CHUNK_PAYLOAD_MAX : (uint16_t)remaining;
-
+        
         data_chunk_payload_t payload;
         payload.seq_num = i;
         payload.total_chunks = total_chunks;
         memcpy(payload.data, filler, chunk_len);
         payload.crc16 = crc16_ccitt(payload.data, chunk_len);
-
-
         uint16_t msg_len = (uint16_t)(DATA_CHUNK_HEADER_SIZE + chunk_len);
 
-        ulTaskNotifyTake(pdTRUE, 0);
-
-        esp_ble_mesh_client_model_send_msg(
-            vendor_client.model, &ctx, ESP_BLE_MESH_VND_MODEL_OP_DATA_CHUNK,
-            msg_len, (uint8_t *)&payload, MSG_TIMEOUT, true, MSG_ROLE
-        );
-
-
-        TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(5000);
         bool acked = false;
         bool crc_ok = false;
+        int retries = 0;
+        const int MAX_RETRIES = 6; // Simula un timeout de hasta 30 segundos (6 intentos x 5s)
 
-        while (xTaskGetTickCount() < deadline) {
-            TickType_t remaining = deadline - xTaskGetTickCount();
-            uint32_t notified = ulTaskNotifyTake(pdTRUE, remaining);
-            if (notified == 0) {
-                break;   
-            }
-            if (last_data_ack_seq == i) {
-                acked  = true;
-                crc_ok = last_data_ack_ok;
-      
-                rssi_stats_add(&data_rssi_stats, last_data_ack_rssi);
-                break;
+        while (!acked && retries < MAX_RETRIES) {
+            ulTaskNotifyTake(pdTRUE, 0); // Limpiamos notificaciones previas
+            
+            esp_ble_mesh_client_model_send_msg(
+                vendor_client.model, &ctx, ESP_BLE_MESH_VND_MODEL_OP_DATA_CHUNK,
+                msg_len, (uint8_t *)&payload, MSG_TIMEOUT, true, MSG_ROLE
+            );
+
+            TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(5000);
+            
+            while (xTaskGetTickCount() < deadline) {
+                TickType_t remaining_ticks = deadline - xTaskGetTickCount();
+                uint32_t notified = ulTaskNotifyTake(pdTRUE, remaining_ticks);
+                if (notified == 0) {
+                    break; /* Timeout del intento actual */
+                }
+                if (last_data_ack_seq == i) {
+                    acked  = true;
+                    crc_ok = last_data_ack_ok;       
+                    rssi_stats_add(&data_rssi_stats, last_data_ack_rssi);
+                    break; /* ACK recibido correctamente */
+                }
             }
 
+            if (!acked) {
+                retries++;
+                ESP_LOGW(TAG, "TIMEOUT: Chunk #%d/%d sin ACK. Reintento %d/%d...", i, total_chunks, retries, MAX_RETRIES);
+                vTaskDelay(pdMS_TO_TICKS(150)); /* Pausa crítica para permitir al stack limpiar buffers antes de reintentar */
+            }
         }
 
+        /* Evaluación final tras los reintentos */
         if (!acked) {
             chunk_lost++;
-            ESP_LOGW(TAG, "TIMEOUT: Chunk #%d/%d de %s sin ACK valido (5s)", i, total_chunks, label);
+            ESP_LOGE(TAG, "PERDIDO: Chunk #%d/%d falló tras %d intentos (Timeout total muy alto).", i, total_chunks, MAX_RETRIES);
         } else if (!crc_ok) {
             chunk_lost++;
-            ESP_LOGE(TAG, "CRC INVALIDO: Chunk #%d/%d de %s llego corrupto segun el receptor", i, total_chunks, label);
+            ESP_LOGE(TAG, "CRC INVÁLIDO: Chunk #%d/%d de %s llegó corrupto", i, total_chunks, label);
         } else {
             bytes_ok += chunk_len;
         }
 
-
-        vTaskDelay(20 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(50)); /* Retardo entre chunks correctos para no saturar al receptor */
     }
 
     int64_t elapsed_us = esp_timer_get_time() - start;
@@ -305,9 +279,7 @@ static void run_data_transfer_test(uint32_t total_bytes, const char *label)
     rssi_stats_log("RSSI/SNR (DATA_ACK)", &data_rssi_stats);
 }
 
-
-static void run_ping_round(uint16_t round_size)
-{
+static void run_ping_round(uint16_t round_size) {
     ESP_LOGI(TAG, "=== RONDA DE PING (%d mensajes) ===", round_size);
 
     esp_ble_mesh_msg_ctx_t ctx = {
@@ -326,18 +298,17 @@ static void run_ping_round(uint16_t round_size)
         ping_payload_t payload = {
             .seq_num = tx_count,
             .total_in_round = round_size,
-            .timestamp = esp_timer_get_time()
+            .timestamp = esp_timer_get_time(),
+            .last_rtt_ms = s_last_rtt_ms // AQUI SE HA MODIFICADO: ENVIAMOS LA LATENCIA AL GATEWAY
         };
 
-        ulTaskNotifyTake(pdTRUE, 0);
-
+        ulTaskNotifyTake(pdTRUE, 0); 
         esp_ble_mesh_client_model_send_msg(
             vendor_client.model, &ctx, ESP_BLE_MESH_VND_MODEL_OP_PING,
             sizeof(ping_payload_t), (uint8_t *)&payload, MSG_TIMEOUT, true, MSG_ROLE
         );
 
         uint32_t notified = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5000));
-
         if (notified == 0) {
             lost_count++;
             ESP_LOGW(TAG, "TIMEOUT: Ping #%d sin respuesta (5s)", tx_count);
@@ -354,21 +325,19 @@ static void run_ping_round(uint16_t round_size)
     ESP_LOGI(TAG, "Enviados: %d | Recibidos: %d | Perdidos (Timeout): %d", round_size, rx_count, lost_count);
     ESP_LOGI(TAG, "Packet Loss: %.2f %%", packet_loss);
     ESP_LOGI(TAG, "Throughput Aproximado: %.2f bps", throughput);
+    
     rssi_stats_log("RSSI/SNR (PONG)", &ping_rssi_stats);
 }
 
-
 static void ping_test_task(void *pvParameters) {
-
     vTaskDelay(2000 / portTICK_PERIOD_MS);
-
+    
     ESP_LOGI(TAG, "=== BENCHMARK INICIAL (una sola vez) ===");
     run_ping_round(TOTAL_PING_MESSAGES);
     run_data_transfer_test(DATA_TEST_SIZE_1KB,   "1KB");
     run_data_transfer_test(DATA_TEST_SIZE_10KB,  "10KB");
     run_data_transfer_test(DATA_TEST_SIZE_100KB, "100KB");
     ESP_LOGI(TAG, "=== BENCHMARK INICIAL FINALIZADO -- entrando en modo continuo ===");
-
 
     for (;;) {
         run_ping_round(CONTINUOUS_PING_COUNT);
@@ -377,16 +346,13 @@ static void ping_test_task(void *pvParameters) {
     }
 }
 
-static void prov_complete(uint16_t net_idx, uint16_t addr, uint8_t flags, uint32_t iv_index)
-{
+static void prov_complete(uint16_t net_idx, uint16_t addr, uint8_t flags, uint32_t iv_index) {
     ESP_LOGI(TAG, "net_idx 0x%03x, addr 0x%04x", net_idx, addr);
     node_net_idx = net_idx;
-
 }
 
 static void example_ble_mesh_provisioning_cb(esp_ble_mesh_prov_cb_event_t event,
-                                             esp_ble_mesh_prov_cb_param_t *param)
-{
+                                             esp_ble_mesh_prov_cb_param_t *param) {
     switch (event) {
     case ESP_BLE_MESH_NODE_PROV_COMPLETE_EVT:
         ESP_LOGI(TAG, "ESP_BLE_MESH_NODE_PROV_COMPLETE_EVT");
@@ -399,8 +365,7 @@ static void example_ble_mesh_provisioning_cb(esp_ble_mesh_prov_cb_event_t event,
 }
 
 static void example_ble_mesh_config_server_cb(esp_ble_mesh_cfg_server_cb_event_t event,
-                                              esp_ble_mesh_cfg_server_cb_param_t *param)
-{
+                                              esp_ble_mesh_cfg_server_cb_param_t *param) {
     if (event == ESP_BLE_MESH_CFG_SERVER_STATE_CHANGE_EVT) {
         switch (param->ctx.recv_op) {
         case ESP_BLE_MESH_MODEL_OP_APP_KEY_ADD:
@@ -408,7 +373,6 @@ static void example_ble_mesh_config_server_cb(esp_ble_mesh_cfg_server_cb_event_t
             break;
         case ESP_BLE_MESH_MODEL_OP_MODEL_APP_BIND:
             ESP_LOGI(TAG, "ESP_BLE_MESH_MODEL_OP_MODEL_APP_BIND - listo para iniciar pings");
-
             if (ping_task_handle == NULL) {
                 xTaskCreate(ping_test_task, "ping_test_task", 4096, NULL, 5, &ping_task_handle);
             }
@@ -420,8 +384,7 @@ static void example_ble_mesh_config_server_cb(esp_ble_mesh_cfg_server_cb_event_t
 }
 
 static void example_ble_mesh_custom_model_cb(esp_ble_mesh_model_cb_event_t event,
-                                             esp_ble_mesh_model_cb_param_t *param)
-{
+                                             esp_ble_mesh_model_cb_param_t *param) {
     switch (event) {
     case ESP_BLE_MESH_MODEL_OPERATION_EVT:
         if (param->model_operation.opcode == ESP_BLE_MESH_VND_MODEL_OP_PONG) {
@@ -430,19 +393,19 @@ static void example_ble_mesh_custom_model_cb(esp_ble_mesh_model_cb_event_t event
             int8_t rssi = param->model_operation.ctx->recv_rssi;
             rx_count++;
             rssi_stats_add(&ping_rssi_stats, rssi);
+            
             float rtt_ms = (float)(time_now - recv_payload->timestamp) / 1000.0;
+            s_last_rtt_ms = rtt_ms; // AQUI SE HA MODIFICADO: GUARDAMOS LA LATENCIA
+            
             ESP_LOGI(TAG, "PONG #%d recibido. RTT: %.2f ms | RSSI: %d dBm", recv_payload->seq_num, rtt_ms, rssi);
-
             if (ping_task_handle != NULL) {
                 xTaskNotifyGive(ping_task_handle);
             }
         } else if (param->model_operation.opcode == ESP_BLE_MESH_VND_MODEL_OP_DATA_ACK) {
-
             data_ack_payload_t *ack = (data_ack_payload_t *)param->model_operation.msg;
             last_data_ack_seq  = ack->seq_num;
             last_data_ack_ok   = (ack->crc_ok == 1);
             last_data_ack_rssi = param->model_operation.ctx->recv_rssi;
-
             if (ping_task_handle != NULL) {
                 xTaskNotifyGive(ping_task_handle);
             }
@@ -453,43 +416,31 @@ static void example_ble_mesh_custom_model_cb(esp_ble_mesh_model_cb_event_t event
     }
 }
 
-static esp_err_t ble_mesh_init(void)
-{
+static esp_err_t ble_mesh_init(void) {
     esp_err_t err;
-
     esp_ble_mesh_register_prov_callback(example_ble_mesh_provisioning_cb);
     esp_ble_mesh_register_config_server_callback(example_ble_mesh_config_server_cb);
     esp_ble_mesh_register_custom_model_callback(example_ble_mesh_custom_model_cb);
-
     err = esp_ble_mesh_init(&provision, &composition);
     if (err != ESP_OK) return err;
-
-
     err = esp_ble_mesh_client_model_init(&vnd_models[0]);
     if (err) return err;
-
     err = esp_ble_mesh_node_prov_enable((esp_ble_mesh_prov_bearer_t)(ESP_BLE_MESH_PROV_ADV | ESP_BLE_MESH_PROV_GATT));
     if (err != ESP_OK) return err;
-
     ESP_LOGI(TAG, "BLE Mesh Node initialized (modo PINGER hacia 0x%04x)", TARGET_ADDR);
-
     return ESP_OK;
 }
 
-void app_main(void)
-{
+void app_main(void) {
     esp_err_t err;
-
     err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         err = nvs_flash_init();
     }
     ESP_ERROR_CHECK(err);
-
     err = bluetooth_init();
     if (err) return;
-
     ble_mesh_get_dev_uuid(dev_uuid);
     ble_mesh_init();
 }
