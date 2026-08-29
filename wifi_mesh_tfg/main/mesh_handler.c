@@ -73,9 +73,7 @@ static void run_payload_experiment(uint32_t total_kb)
     };
 
     vTaskDelay(pdMS_TO_TICKS(1500));
-    uint32_t power_idle = metrics_get_current_power();
 
-    uint32_t max_power_active = 0;
 
     uint32_t start_time = now_ms();
     for (uint32_t i = 0; i < total_kb; i++)
@@ -85,23 +83,20 @@ static void run_payload_experiment(uint32_t total_kb)
       
         metrics_record_tx(err == ESP_OK);
 
-        uint32_t current_p = metrics_get_current_power();
-        if (current_p > max_power_active)
-        {
-            max_power_active = current_p;
-        }
-
         vTaskDelay(pdMS_TO_TICKS(5));
     }
     uint32_t duration_ms = now_ms() - start_time;
 
+    float throug = 0.0f; // MODIFICADO
+    if (duration_ms > 0) { // MODIFICADO
+        throug = ((float)total_kb / (float)duration_ms) * 1000.0f; // MODIFICADO
+    }
     exp_packet_t res_pkt;
     build_header(&res_pkt.hdr, MSG_EXP_RESULT);
     res_pkt.kb = total_kb;
     res_pkt.time_ms = duration_ms;
-    res_pkt.p_idle = power_idle;
-    res_pkt.p_active = max_power_active;
     res_pkt.ps_mode = peripherals_get_ps_mode();
+    res_pkt.throughput = throug;
 
     mesh_data_t res_data = {
         .data = (uint8_t *)&res_pkt,
@@ -114,39 +109,7 @@ static void run_payload_experiment(uint32_t total_kb)
     metrics_record_tx(res_err == ESP_OK);
 }
 
-float run_payload_metrics_power(const mesh_addr_t *root_addr, mesh_packet_t *pkt_to_send)
-{
 
-    mesh_data_t metrics_data = {
-        .data = (uint8_t *)pkt_to_send,
-        .size = MESH_PACKET_SIZE,
-        .proto = MESH_PROTO_BIN,
-        .tos = MESH_TOS_P2P,
-    };
-
-    ESP_LOGI("METRICS_TX", "[Muestreo] Iniciando transmisión Wi-Fi Mesh...");
-
-    esp_err_t err = esp_mesh_send(root_addr, &metrics_data, MESH_DATA_P2P, NULL, 0);
-    metrics_record_tx(err == ESP_OK);
-
-    float max_power_during_tx = 0.0f;
-
-    for (int i = 0; i < 5; i++)
-    {
-        float current_power = metrics_get_current_power();
-
-        if (current_power > max_power_during_tx)
-        {
-            max_power_during_tx = current_power;
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-
-    ESP_LOGD("METRICS_TX", "[Muestreo] Pico de potencia detectado: %.2f mW", max_power_during_tx);
-
-    return max_power_during_tx;
-}
 
 static void reply_pong(const mesh_addr_t *requester, const ping_payload_t *ping)
 {
@@ -215,12 +178,11 @@ static void rx_task(void *arg)
             if (esp_mesh_is_root())
             {
                 ESP_LOGI(TAG, "Métricas de %02x:%02x:%02x:%02x:%02x:%02x"
-                              " | capa=%d rssi=%d dBm latency=%lu ms RAW=[%s]",
+                              " | capa=%d rssi=%d dBm latency=%lu ms",
                          MAC2STR(pkt->hdr.src_mac),
                          pkt->payload.metrics.layer,
                          pkt->payload.metrics.rssi_parent,
-                         (unsigned long)pkt->payload.metrics.latency_ms,
-                         pkt->payload.metrics.i2c_raw);
+                         (unsigned long)pkt->payload.metrics.latency_ms);
                 mqtt_publish_metrics(pkt->hdr.src_mac,
                                      &pkt->payload.metrics,
                                      pkt->hdr.seq);
@@ -248,8 +210,7 @@ static void rx_task(void *arg)
                 ESP_LOGW(TAG, "====================================");
                 ESP_LOGW(TAG, " RESULTADO EXPERIMENTO DE %lu KB", (unsigned long)exp->kb);
                 ESP_LOGW(TAG, " Tiempo de envío: %lu ms", (unsigned long)exp->time_ms);
-                ESP_LOGW(TAG, " Consumo en reposo: %lu mW", (unsigned long)exp->p_idle);
-                ESP_LOGW(TAG, " Pico maximo de consumo: %lu mW", (unsigned long)exp->p_active);
+                ESP_LOGW(TAG, " Throughput: %.2f KB/s", exp->throughput);
                 ESP_LOGW(TAG, " Modo Power Save: %d", exp->ps_mode);
                 ESP_LOGW(TAG, "====================================");
 
@@ -269,8 +230,6 @@ static void tx_metrics_task(void *arg)
 
     xEventGroupWaitBits(s_mesh_evt_group, MESH_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
     vTaskDelay(pdMS_TO_TICKS(2000));
-
-    static uint32_t s_power_after_json = 0;
 
     while (true)
     {
@@ -317,9 +276,16 @@ static void tx_metrics_task(void *arg)
             metrics_collect(&metrics_pkt.payload.metrics);
 
             metrics_pkt.payload.metrics.latency_ms = s_last_rtt;
-            metrics_pkt.payload.metrics.power_json_prev_mw = s_power_after_json;
 
-            s_power_after_json = run_payload_metrics_power(&s_root_addr, &metrics_pkt);
+            mesh_data_t metrics_data = {
+                .data = (uint8_t *)&metrics_pkt,
+                .size = MESH_PACKET_SIZE,
+                .proto = MESH_PROTO_BIN,
+                .tos = MESH_TOS_P2P,
+            };
+            esp_err_t err = esp_mesh_send(&s_root_addr, &metrics_data, MESH_DATA_P2P, NULL, 0);
+            metrics_record_tx(err == ESP_OK);
+
 
             vTaskDelay(pdMS_TO_TICKS(5000));
 
@@ -420,12 +386,11 @@ esp_err_t mesh_handler_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_FLASH));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE)); // Deshabilitamos el power save para evitar latencias adicionales en la recepción de paquetes REVISAR ESTO ES IMPRESIONANTE EL CAMBIO EN LAS LATENCIAS A MEJORADO MUCHISIMO
-    /* MAC propia — válida solo después de esp_wifi_start()               */
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));             
     ESP_ERROR_CHECK(esp_wifi_get_mac(WIFI_IF_STA, s_my_mac));
     ESP_LOGI(TAG, "MAC del nodo: %02x:%02x:%02x:%02x:%02x:%02x", MAC2STR(s_my_mac));
 
-    /* ── ESP-MESH ────────────────────────────────────────────────────────── */
+
     ESP_ERROR_CHECK(esp_mesh_init());
 
     ESP_ERROR_CHECK(esp_event_handler_register(MESH_EVENT, ESP_EVENT_ANY_ID,
@@ -459,8 +424,7 @@ esp_err_t mesh_handler_init(void)
     ESP_ERROR_CHECK(esp_mesh_set_max_layer(CONFIG_MESH_MAX_LAYER));
     ESP_ERROR_CHECK(esp_mesh_set_ap_authmode(WIFI_AUTH_OPEN));
 
-    ESP_ERROR_CHECK(metrics_init()); // Empezar a medir las metricas, tambien se incia el i2c para sacar el consumo
-    ESP_ERROR_CHECK(peripherals_init());
+    ESP_ERROR_CHECK(metrics_init()); 
 
     xTaskCreate(rx_task, "mesh_rx", 4096, NULL, 5, NULL);
     xTaskCreate(tx_metrics_task, "mesh_tx", 4096, NULL, 4, NULL);

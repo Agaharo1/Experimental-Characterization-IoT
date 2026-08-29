@@ -20,3 +20,7 @@ __pycache__/
 # Imágenes y Gráficas
 # =========================
 *.png
+ble_mesh_tfg/vendor_client/.vscode/settings.json
+ble_mesh_tfg/vendor_client/dependencies.lock
+wifi_mesh_tfg/.vscode/c_cpp_properties.json
+wifi_mesh_tfg/dependencies.lock

@@ -1,11 +1,11 @@
 {
   "idf.currentSetup": "C:\\Users\\agaha\\esp32\\v5.4\\esp-idf",
   "idf.customExtraVars": {
-    "IDF_TARGET": "esp32"
+    "IDF_TARGET": "esp32s3"
   },
   "idf.flashType": "UART",
-  "idf.portWin": "COM4",
+  "idf.portWin": "COM7",
   "idf.openOcdConfigs": [
-    "board/esp32-wrover-kit-3.3v.cfg"
+    "board/esp32s3-builtin.cfg"
   ]
 }

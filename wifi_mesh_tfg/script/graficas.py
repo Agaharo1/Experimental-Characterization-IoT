@@ -3,10 +3,11 @@ import matplotlib.pyplot as plt
 from influxdb import DataFrameClient
 import os
 
-INFLUX_HOST = '192.168.1.35'
+INFLUX_HOST = '192.168.1.36'
 INFLUX_PORT = 8086
 DB_NAME = 'sensores'
-MAC = '5c:01:3b:67:14:24'
+
+MAC = '3c:0f:02:ee:13:bc'
 
 metricas_generales = {
     'latency_ms': 'Milisegundos (ms)',
@@ -28,8 +29,7 @@ metricas_generales = {
 
 metricas_separadas = {
     'duration_ms': 'Milisegundos (ms)',
-    'power_idle_mw': 'Milivatios (mW)',
-    'power_active_mw': 'Milivatios (mW)'
+    'throughput': 'KB/s'
 }
 
 tamanos_payload = [1, 10, 100] # Tamaños en KB

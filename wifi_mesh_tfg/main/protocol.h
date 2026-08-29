@@ -31,32 +31,28 @@ typedef struct __attribute__((packed)) {
 
 
 typedef struct __attribute__((packed)) {
-    int8_t   rssi_parent;      
-    int8_t   rssi_router;      
-    int8_t   snr_estimate;     
-    uint8_t  layer;            
-    uint8_t  hops_to_root;     
-    uint8_t  connected_subs;   
-    uint32_t tx_count;         
-    uint32_t rx_count;         
-    uint32_t tx_fail;          
-    uint32_t latency_ms;       
-    uint32_t free_heap;        
-    uint32_t uptime_s;         
-    uint32_t ping_lost_count;  
-    uint32_t power_json_prev_mw;
-    char i2c_raw[48];
+    int8_t   rssi_parent;          
+    int8_t   rssi_router;          
+    int8_t   snr_estimate;         
+    uint8_t  layer;                
+    uint8_t  hops_to_root;         
+    uint8_t  connected_subs;       
+    uint32_t tx_count;             
+    uint32_t rx_count;             
+    uint32_t tx_fail;              
+    uint32_t latency_ms;           
+    uint32_t free_heap;            
+    uint32_t uptime_s;             
+    uint32_t ping_lost_count;      
     uint8_t ps_mode;
 } metrics_payload_t;
 
-typedef struct
-{
+typedef struct {
     mesh_hdr_t hdr;
     uint32_t kb;
     uint32_t time_ms;
-    uint32_t p_idle;
-    uint32_t p_active;
     uint8_t ps_mode;
+    float throughput;
 } exp_packet_t;
 
 

@@ -51,10 +51,7 @@ esp_err_t metrics_init(void)
     return ESP_OK;
 }
 
-uint32_t metrics_get_current_power(void)
-{
-    return peripherals_get_power_mw();
-}
+
 
 void metrics_record_ping_loss(void)
 {
@@ -107,8 +104,6 @@ void metrics_collect(metrics_payload_t *m)
         m->ping_lost_count = s_ping_lost_count;
         xSemaphoreGive(s_mutex);
     }
-
-    peripherals_get_i2c_raw(m->i2c_raw, sizeof(m->i2c_raw));
 
     m->free_heap = esp_get_free_heap_size();
     m->uptime_s  = (uint32_t)(esp_timer_get_time() / 1000000ULL);
