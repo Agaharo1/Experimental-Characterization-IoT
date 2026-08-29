@@ -40,6 +40,10 @@ static TaskHandle_t s_tx_task_handle = NULL;
 static uint32_t s_last_rtt = 0;
 static bool s_pong_received = false;
 
+static uint32_t s_exp_start_ms = 0;
+static uint32_t s_exp_bytes_rx = 0;
+static uint8_t s_exp_mac_active[6] = {0};
+
 #define MAX_PENDING_PINGS 8
 
 static inline uint32_t now_ms(void)
@@ -82,14 +86,12 @@ static void run_payload_experiment(uint32_t total_kb)
         esp_err_t err = esp_mesh_send(&s_root_addr, &mesh_data, MESH_DATA_P2P, NULL, 0);
       
         metrics_record_tx(err == ESP_OK);
-
-        vTaskDelay(pdMS_TO_TICKS(5));
     }
     uint32_t duration_ms = now_ms() - start_time;
 
-    float throug = 0.0f; // MODIFICADO
-    if (duration_ms > 0) { // MODIFICADO
-        throug = ((float)total_kb / (float)duration_ms) * 1000.0f; // MODIFICADO
+    float throug = 0.0f; 
+    if (duration_ms > 0) { 
+        throug = ((float)total_kb / (float)duration_ms) * 1000.0f;
     }
     exp_packet_t res_pkt;
     build_header(&res_pkt.hdr, MSG_EXP_RESULT);
@@ -203,18 +205,49 @@ static void rx_task(void *arg)
                 process_pong(pkt->hdr.src_mac, &pkt->payload.ping);
             break;
 
+        case MSG_EXP_DUMMY:
+            if (esp_mesh_is_root())
+            {
+               
+                if (s_exp_bytes_rx == 0 || memcmp(s_exp_mac_active, pkt->hdr.src_mac, 6) != 0) {
+                    memcpy(s_exp_mac_active, pkt->hdr.src_mac, 6);
+                    s_exp_start_ms = now_ms();
+                    s_exp_bytes_rx = 0;
+                }
+                s_exp_bytes_rx += DUMMY_EXPERIMENT_SIZE; // Sumamos los bytes recibidos
+            }
+            break;
+
         case MSG_EXP_RESULT:
             if (esp_mesh_is_root())
             {
                 exp_packet_t *exp = (exp_packet_t *)rx_buf;
-                ESP_LOGW(TAG, "====================================");
-                ESP_LOGW(TAG, " RESULTADO EXPERIMENTO DE %lu KB", (unsigned long)exp->kb);
-                ESP_LOGW(TAG, " Tiempo de envío: %lu ms", (unsigned long)exp->time_ms);
-                ESP_LOGW(TAG, " Throughput: %.2f KB/s", exp->throughput);
-                ESP_LOGW(TAG, " Modo Power Save: %d", exp->ps_mode);
-                ESP_LOGW(TAG, "====================================");
+                
+               
+                uint32_t duration_rx_ms = now_ms() - s_exp_start_ms;
+                float real_throughput = 0.0f;
+                
+                if (duration_rx_ms > 0 && s_exp_bytes_rx > 0) {
+                    // (Bytes / 1000) para KB, (ms / 1000) para segundos -> KB/s
+                    real_throughput = ((float)s_exp_bytes_rx / 1000.0f) / ((float)duration_rx_ms / 1000.0f);
+                }
 
+                ESP_LOGW(TAG, "====================================");
+                ESP_LOGW(TAG, " EXPERIMENTO ACUMULADO DESDE %02x:%02x:%02x:%02x:%02x:%02x", MAC2STR(pkt->hdr.src_mac));
+                ESP_LOGW(TAG, " Paquetes enviados (Teórico): %lu KB", (unsigned long)exp->kb);
+                ESP_LOGW(TAG, " Datos recibidos (Real): %lu bytes", (unsigned long)s_exp_bytes_rx);
+                ESP_LOGW(TAG, " Tiempo de recepción: %lu ms", (unsigned long)duration_rx_ms);
+                ESP_LOGW(TAG, " Throughput Acumulado (Root): %.2f KB/s", real_throughput);
+                ESP_LOGW(TAG, "====================================");
+                
+                // Sobrescribimos los valores locales del nodo con los reales del Root para MQTT
+                exp->time_ms = duration_rx_ms;
+                exp->throughput = real_throughput;
+                
                 mqtt_publish_exp_result(pkt->hdr.src_mac, exp);
+
+                // Reiniciamos para el próximo experimento
+                s_exp_bytes_rx = 0; 
             }
             break;
         default:
@@ -231,7 +264,7 @@ static void tx_metrics_task(void *arg)
     xEventGroupWaitBits(s_mesh_evt_group, MESH_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
     vTaskDelay(pdMS_TO_TICKS(2000));
 
-    while (true)
+    for(int i =0; i<15; i++)
     {
         if (!esp_mesh_is_root() && s_root_known)
         {
@@ -289,18 +322,21 @@ static void tx_metrics_task(void *arg)
 
             vTaskDelay(pdMS_TO_TICKS(5000));
 
-            run_payload_experiment(1); // 1 KB
+            run_payload_experiment(1); 
             vTaskDelay(pdMS_TO_TICKS(5000));
 
-            run_payload_experiment(10); //  10 KB
+            run_payload_experiment(10);
             vTaskDelay(pdMS_TO_TICKS(5000));
 
-            run_payload_experiment(100); //  100 KB
+            run_payload_experiment(100); 
             vTaskDelay(pdMS_TO_TICKS(5000));
         }
 
         vTaskDelay(pdMS_TO_TICKS(CONFIG_MESH_TX_INTERVAL_MS));
     }
+    ESP_LOGI(TAG, "Tarea de transmisión de métricas finalizada.");
+    s_tx_task_handle = NULL;
+    vTaskDelete(NULL);
 }
 
 static void ip_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *data)

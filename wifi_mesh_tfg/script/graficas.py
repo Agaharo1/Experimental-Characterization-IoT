@@ -24,7 +24,6 @@ metricas_generales = {
     'ping_lost_count': 'Pings perdidos',
     'free_heap': 'Bytes libres',
     'uptime_s': 'Segundos (s)',
-    'power_json': 'Milivatios (mW)'
 }
 
 metricas_separadas = {
