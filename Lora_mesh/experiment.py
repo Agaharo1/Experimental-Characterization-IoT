@@ -4,91 +4,138 @@ import paho.mqtt.client as mqtt
 from pubsub import pub
 import meshtastic.serial_interface
 
-DESTINATION_NODE = "!1a2b3c4d" 
+DESTINATION_NODE = "!02ed8570" 
 PAYLOAD_SIZE = 200 
-MAX_PACKETS = 50 
 
+EXPERIMENTOS = {
+    "1_KB": 5,      
+    "10_KB": 50,    
+    "100_KB": 500   
+}
 
-MQTT_BROKER = "192.168.1.35" 
+MQTT_BROKER = "192.168.1.36" 
 MQTT_PORT = 1883
-MQTT_TOPIC = f"iot/mesh/node/{DESTINATION_NODE.strip('!')}/metrics/performance"
+MQTT_TOPIC_BASE = f"iot/mesh/node/{DESTINATION_NODE.strip('!')}/metrics/experimentos"
 
-start_time = 0
+# Variables globales
 waiting_for_ack = False
-packets_sent = 0
-
+ack_received = False
+last_snr = 0.0
 
 mqtt_client = mqtt.Client()
 
 def on_receive(packet, interface):
-    global start_time, waiting_for_ack
+    global waiting_for_ack, ack_received, last_snr
     
     if waiting_for_ack and packet.get('decoded', {}).get('portnum') == 'ROUTING_APP':
-        end_time = time.time()
+        ack_received = True
+        waiting_for_ack = False
+        last_snr = packet.get('rxSnr', 0.0)
+
+def ejecutar_experimento(interface, nombre, num_paquetes):
+    global waiting_for_ack, ack_received, last_snr
+    
+    print(f"\n{'='*60}")
+    print(f"🚀 INICIANDO EXPERIMENTO: {nombre} ({num_paquetes} paquetes)")
+    print(f"{'='*60}")
+    
+    payload_data = "X" * PAYLOAD_SIZE
+    paquetes_exitosos = 0
+    lista_snr = []
+    
+    # Inicia el cronómetro maestro del experimento
+    tiempo_inicio_total = time.time()
+    
+    for i in range(num_paquetes):
+        ack_received = False
+        waiting_for_ack = True
+        last_snr = 0.0
+        paquete_actual = i + 1
         
-        latencia = (end_time - start_time) / 2
-        throughput = PAYLOAD_SIZE / latencia
+        print(f"📦 Enviando paquete {paquete_actual}/{num_paquetes}...")
+        tiempo_envio_paquete = time.time()
         
-        print(f"✅ ¡ACK Recibido! Latencia: {latencia:.2f}s | Throughput: {throughput:.2f} B/s")
+        interface.sendData(payload_data.encode('utf-8'), 
+                           destinationId=DESTINATION_NODE, 
+                           portNum=256,
+                           wantAck=True)
+        
+        # Espera hasta 15 segundos por el ACK
+        while waiting_for_ack and (time.time() - tiempo_envio_paquete) < 15:
+            time.sleep(0.1)
+            
+        if ack_received:
+            tiempo_llegada_ack = time.time()
+            latencia = (tiempo_llegada_ack - tiempo_envio_paquete) / 2
+            throughput_paquete = PAYLOAD_SIZE / latencia if latencia > 0 else 0
+            
+            print(f"  ✅ ACK: Latencia {latencia:.2f}s | Throughput {throughput_paquete:.2f} B/s | SNR: {last_snr} dB")
+            
+            paquetes_exitosos += 1
+            lista_snr.append(last_snr)
+        else:
+            print("  ❌ Timeout: Paquete perdido.")
+            waiting_for_ack = False
+            
+
+        tiempo_transcurrido = time.time() - tiempo_inicio_total
+        bytes_entregados_acumulados = paquetes_exitosos * PAYLOAD_SIZE
+        
+        throughput_acumulado = bytes_entregados_acumulados / tiempo_transcurrido if tiempo_transcurrido > 0 else 0
+        snr_promedio_acumulado = sum(lista_snr) / len(lista_snr) if len(lista_snr) > 0 else 0.0
         
         mqtt_payload = {
             "mac": DESTINATION_NODE,
-            "latencia": latencia,
-            "throughput": throughput,
-            "payload_size": PAYLOAD_SIZE
+            "experimento": nombre,
+            "paquetes_intentados": paquete_actual,
+            "paquetes_entregados": paquetes_exitosos,
+            "tiempo_total_segundos": round(tiempo_transcurrido, 2),
+            "throughput_bps": round(throughput_acumulado, 2),
+            "snr_promedio_db": round(snr_promedio_acumulado, 2)
         }
         
- 
-        mqtt_client.publish(MQTT_TOPIC, json.dumps(mqtt_payload))
-        print(f"☁️  Datos publicados en MQTT -> {MQTT_TOPIC}\n")
+        topic = f"{MQTT_TOPIC_BASE}/{nombre.lower()}"
+        mqtt_client.publish(topic, json.dumps(mqtt_payload))
+        # Quitado el print() de MQTT en cada ciclo para no saturarte la pantalla de texto,
+        # pero los datos sí se están enviando al servidor.
         
-        waiting_for_ack = False
+        # Pausa obligatoria por Duty Cycle antes de lanzar el siguiente
+        time.sleep(1) 
+        
+    print(f"\n🏁 FIN DEL EXPERIMENTO {nombre}")
+    print(f"   Entregados: {paquetes_exitosos}/{num_paquetes}")
+    print(f"   Tiempo: {tiempo_transcurrido:.2f}s | Throughput: {throughput_acumulado:.2f} B/s | SNR: {snr_promedio_acumulado:.2f} dB")
+
 
 def main():
-    global start_time, waiting_for_ack, packets_sent
-    
-    print("Conectando al broker MQTT local...")
+    print("Conectando al broker MQTT...")
     try:
         mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
         mqtt_client.loop_start()
     except Exception as e:
-        print(f"❌ Error conectando a MQTT: {e}")
+        print(f"❌ Error MQTT: {e}")
         return
 
     print("Conectando al Nodo Base por USB...")
     interface = meshtastic.serial_interface.SerialInterface()
     pub.subscribe(on_receive, "meshtastic.receive")
     
-    payload_data = "X" * PAYLOAD_SIZE
-    
-    print(f"\nIniciando inyección de {MAX_PACKETS} paquetes hacia {DESTINATION_NODE}...\n")
-    
     try:
-        while packets_sent < MAX_PACKETS:
-            if not waiting_for_ack:
-                packets_sent += 1
-                print(f"📦 Enviando paquete {packets_sent}/{MAX_PACKETS}...")
-                start_time = time.time()
-                waiting_for_ack = True
-                
-                interface.sendData(payload_data.encode('utf-8'), 
-                                 destinationId=DESTINATION_NODE, 
-                                 portNum=256,
-                                 wantAck=True)
-                
-            time.sleep(15)
+        for nombre, num_paquetes in EXPERIMENTOS.items():
+            ejecutar_experimento(interface, nombre, num_paquetes)
             
-            if waiting_for_ack:
-                print("❌ Tiempo de espera agotado (Packet Loss). Reintentando...\n")
-                waiting_for_ack = False
+            if nombre != "100_KB":
+                print("⏳ Esperando 15 segundos para que la radio descanse...")
+                time.sleep(15)
 
     except KeyboardInterrupt:
-        print("\nPrueba finalizada por el usuario.")
+        print("\nInterrumpido por el usuario.")
     
-    print("\n🏁 Experimento completado.")
+    print("\n🏁 TODOS LOS EXPERIMENTOS COMPLETADOS.")
     interface.close()
     mqtt_client.loop_stop()
     mqtt_client.disconnect()
+
 
 if __name__ == "__main__":
     main()
