@@ -2,7 +2,7 @@ dependencies:
   example_init:
     dependencies: []
     source:
-      path: C:\Users\anton\esp\v5.4\esp-idf\examples\bluetooth\esp_ble_mesh\common_components\example_init
+      path: C:\Users\agaha\esp32\v5.4\esp-idf\examples\bluetooth\esp_ble_mesh\common_components\example_init
       type: local
     version: '*'
   idf:

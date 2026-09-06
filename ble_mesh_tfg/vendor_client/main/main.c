@@ -44,7 +44,7 @@ typedef struct __attribute__((packed)) {
     uint16_t seq_num;
     uint16_t total_in_round;       
     int64_t  timestamp;
-    float    last_rtt_ms; // AQUI SE HA MODIFICADO: AÑADIDA LATENCIA
+    float    last_rtt_ms; 
 } ping_payload_t;
 
 #define DATA_CHUNK_PAYLOAD_MAX  250
@@ -115,8 +115,8 @@ static uint16_t data_chunks_received  = 0;
 static uint16_t data_crc_fail_count   = 0;
 static uint32_t data_bytes_received   = 0;
 
-static float s_total_latency = 0.0f; // AQUI SE HA MODIFICADO: ACUMULADOR DE LATENCIA
-static int64_t s_data_start_time = 0; // AQUI SE HA MODIFICADO: TIEMPO INICIO TRANSFERENCIA
+static float s_total_latency = 0.0f;
+static int64_t s_data_start_time = 0; 
 
 static uint8_t dev_uuid[ESP_BLE_MESH_OCTET16_LEN];
 
@@ -318,43 +318,48 @@ static void example_ble_mesh_custom_model_cb(esp_ble_mesh_model_cb_event_t event
     switch (event) {
     case ESP_BLE_MESH_MODEL_OPERATION_EVT:
         if (param->model_operation.opcode == ESP_BLE_MESH_VND_MODEL_OP_PING) {
-            ping_payload_t *payload = (ping_payload_t *)param->model_operation.msg;
+            int64_t time_now = esp_timer_get_time();
+            ping_payload_t *recv_payload = (ping_payload_t *)param->model_operation.msg;
             int8_t rssi = param->model_operation.ctx->recv_rssi;
-            if (payload->seq_num == 1) {
+            
+            if (recv_payload->seq_num == 1) {
                 rssi_stats_reset(&ping_rssi_stats);
                 ping_received_count = 0;
-                s_total_latency = 0.0f; // AQUI SE HA MODIFICADO: RESETEO DE LATENCIA
+                s_total_latency = 0.0f; 
             }
+            
             rssi_stats_add(&ping_rssi_stats, rssi);
             ping_received_count++;
-            s_total_latency += payload->last_rtt_ms; // AQUI SE HA MODIFICADO: ACUMULANDO LATENCIA
+            s_total_latency += recv_payload->last_rtt_ms; 
 
-            ESP_LOGI(TAG, "PING #%d recibido de 0x%04x (RSSI: %d dBm). Devolviendo PONG...",
-                     payload->seq_num, param->model_operation.ctx->addr, rssi);
+           
             esp_err_t err = esp_ble_mesh_server_model_send_msg(&vnd_models[0],
                     param->model_operation.ctx, ESP_BLE_MESH_VND_MODEL_OP_PONG,
-                    sizeof(ping_payload_t), (uint8_t *)payload);
+                    sizeof(ping_payload_t), (uint8_t *)recv_payload);
             if (err) {
                 ESP_LOGE(TAG, "Error devolviendo PONG a 0x%04x", param->model_operation.ctx->addr);
             }
 
-            if (payload->seq_num == payload->total_in_round) {
-                rssi_stats_log("RSSI/SNR (PING, ronda completa)", &ping_rssi_stats);
-                float avg = (ping_rssi_stats.count > 0) ? (float)ping_rssi_stats.sum / ping_rssi_stats.count : 0.0f;
-                float loss_pct = ((float)(payload->total_in_round - ping_received_count) / payload->total_in_round) * 100.0f;
-                
-                float pdr = 100.0f - loss_pct; // AQUI SE HA MODIFICADO: CALCULO DE PDR
-                float latencia_avg = (ping_received_count > 0) ? (s_total_latency / ping_received_count) : 0.0f; // AQUI SE HA MODIFICADO: CALCULO DE LATENCIA
+           
+            float avg = (ping_rssi_stats.count > 0) ? (float)ping_rssi_stats.sum / ping_rssi_stats.count : 0.0f;
+            float pdr = ((float)ping_received_count / recv_payload->seq_num) * 100.0f;
+            float latencia_avg = (ping_received_count > 0) ? (s_total_latency / ping_received_count) : 0.0f; 
 
-                mqtt_publish_ping_result(param->model_operation.ctx->addr,
-                        ping_received_count, payload->total_in_round, pdr, // AQUI SE HA MODIFICADO
-                        ping_rssi_stats.min, avg, ping_rssi_stats.max,
-                        avg - ASSUMED_NOISE_FLOOR_DBM, latencia_avg); // AQUI SE HA MODIFICADO
+           
+            if (recv_payload->seq_num == recv_payload->total_in_round) {
+                rssi_stats_log("RSSI/SNR (PING, ronda completa)", &ping_rssi_stats);
             }
-        } else if (param->model_operation.opcode == ESP_BLE_MESH_VND_MODEL_OP_DATA_CHUNK) {
+
+
+            mqtt_publish_ping_result(param->model_operation.ctx->addr,
+                    ping_received_count, recv_payload->total_in_round, pdr, 
+                    ping_rssi_stats.min, avg, ping_rssi_stats.max,
+                    avg - ASSUMED_NOISE_FLOOR_DBM, latencia_avg); 
+        }
+          else if (param->model_operation.opcode == ESP_BLE_MESH_VND_MODEL_OP_DATA_CHUNK) {
             data_chunk_payload_t *chunk = (data_chunk_payload_t *)param->model_operation.msg;
             uint16_t received_len = param->model_operation.length;
-            uint16_t data_len = (received_len > DATA_CHUNK_HEADER_SIZE)
+            uint16_t data_len = (received_len > DATA_CHUNK_HEADER_SIZE) 
                                  ? (uint16_t)(received_len - DATA_CHUNK_HEADER_SIZE) : 0;
             int8_t rssi = param->model_operation.ctx->recv_rssi;
 
@@ -363,8 +368,9 @@ static void example_ble_mesh_custom_model_cb(esp_ble_mesh_model_cb_event_t event
                 data_chunks_received = 0;
                 data_crc_fail_count  = 0;
                 data_bytes_received  = 0;
-                s_data_start_time = esp_timer_get_time(); // AQUI SE HA MODIFICADO: INICIO TEMPORIZADOR
+                s_data_start_time = esp_timer_get_time();
             }
+
             rssi_stats_add(&data_rssi_stats, rssi);
             data_chunks_received++;
             data_bytes_received += data_len;
@@ -373,7 +379,7 @@ static void example_ble_mesh_custom_model_cb(esp_ble_mesh_model_cb_event_t event
             uint8_t  crc_ok = (computed_crc == chunk->crc16) ? 1 : 0;
             if (!crc_ok) {
                 data_crc_fail_count++;
-                ESP_LOGE(TAG, "CRC MISMATCH: Chunk #%d/%d de 0x%04x",
+                ESP_LOGE(TAG, "CRC MISMATCH: Chunk #%d/%d de 0x%04x", 
                          chunk->seq_num, chunk->total_chunks, param->model_operation.ctx->addr);
             }
 
@@ -382,25 +388,39 @@ static void example_ble_mesh_custom_model_cb(esp_ble_mesh_model_cb_event_t event
                     param->model_operation.ctx, ESP_BLE_MESH_VND_MODEL_OP_DATA_ACK,
                     sizeof(ack), (uint8_t *)&ack);
             if (err) {
-                ESP_LOGE(TAG, "Error devolviendo DATA_ACK #%d a 0x%04x",
+                ESP_LOGE(TAG, "Error devolviendo DATA_ACK #%d a 0x%04x", 
                          chunk->seq_num, param->model_operation.ctx->addr);
             }
 
+           
+            
+            float avg = (data_rssi_stats.count > 0) ? (float)data_rssi_stats.sum / data_rssi_stats.count : 0.0f;
+            
+            
+            float pdr = ((float)data_chunks_received / chunk->seq_num) * 100.0f; 
+            
+           
+            int64_t elapsed_us = esp_timer_get_time() - s_data_start_time; 
+            float throughput_bps = (elapsed_us > 0) ? ((data_bytes_received * 8.0f) / (elapsed_us / 1000000.0f)) : 0.0f; 
+
+           
+            uint32_t exp_size = 0;
+            if (chunk->total_chunks <= 5)       exp_size = 1024;
+            else if (chunk->total_chunks <= 41) exp_size = 10240;
+            else                                exp_size = 102400;
+
+           
             if (chunk->seq_num == chunk->total_chunks) {
                 rssi_stats_log("RSSI/SNR (DATA_CHUNK, transferencia completa)", &data_rssi_stats);
-                float avg = (data_rssi_stats.count > 0) ? (float)data_rssi_stats.sum / data_rssi_stats.count : 0.0f;
-                float loss_pct = ((float)(chunk->total_chunks - data_chunks_received) / chunk->total_chunks) * 100.0f;
-                
-                float pdr = 100.0f - loss_pct; // AQUI SE HA MODIFICADO: CALCULO DE PDR
-                int64_t elapsed_us = esp_timer_get_time() - s_data_start_time; // AQUI SE HA MODIFICADO
-                float throughput_bps = (elapsed_us > 0) ? ((data_bytes_received * 8.0f) / (elapsed_us / 1000000.0f)) : 0.0f; // AQUI SE HA MODIFICADO
-
-                mqtt_publish_transfer_result(param->model_operation.ctx->addr,
-                        data_bytes_received, chunk->total_chunks, data_chunks_received,
-                        data_crc_fail_count, pdr, // AQUI SE HA MODIFICADO
-                        data_rssi_stats.min, avg, data_rssi_stats.max,
-                        avg - ASSUMED_NOISE_FLOOR_DBM, throughput_bps); // AQUI SE HA MODIFICADO
             }
+
+           
+            mqtt_publish_transfer_result(param->model_operation.ctx->addr,
+                    exp_size, // Forzamos el tamaño total esperado
+                    chunk->total_chunks, data_chunks_received,
+                    data_crc_fail_count, pdr, 
+                    data_rssi_stats.min, avg, data_rssi_stats.max,
+                    avg - ASSUMED_NOISE_FLOOR_DBM, throughput_bps);
         }
         break;
     default:

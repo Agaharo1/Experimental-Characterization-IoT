@@ -36,7 +36,7 @@ typedef struct __attribute__((packed)) {
     uint16_t seq_num;
     uint16_t total_in_round;      
     int64_t  timestamp;
-    float    last_rtt_ms; // AQUI SE HA MODIFICADO: AÑADIDA LATENCIA AL PAYLOAD
+    float    last_rtt_ms; 
 } ping_payload_t;
 
 #define DATA_CHUNK_PAYLOAD_MAX  250
@@ -64,7 +64,7 @@ static uint16_t crc16_ccitt(const uint8_t *data, size_t len) {
     return crc;
 }
 
-#define TOTAL_PING_MESSAGES 50
+#define TOTAL_PING_MESSAGES 500
 #define DATA_TEST_SIZE_1KB    (1   * 1024)
 #define DATA_TEST_SIZE_10KB   (10  * 1024)
 #define DATA_TEST_SIZE_100KB  (100 * 1024)
@@ -125,8 +125,7 @@ static volatile int8_t   last_data_ack_rssi = 0;
 static rssi_stats_t ping_rssi_stats;
 static rssi_stats_t data_rssi_stats;
 
-static float s_last_rtt_ms = 0.0f; // AQUI SE HA MODIFICADO: VARIABLE PARA GUARDAR LA LATENCIA
-
+static float s_last_rtt_ms = 0.0f; 
 static uint8_t dev_uuid[ESP_BLE_MESH_OCTET16_LEN] = { 0x32, 0x10 };
 
 static esp_ble_mesh_cfg_srv_t config_server = {
@@ -220,10 +219,10 @@ for (uint16_t i = 1; i <= total_chunks; i++) {
         bool acked = false;
         bool crc_ok = false;
         int retries = 0;
-        const int MAX_RETRIES = 6; // Simula un timeout de hasta 30 segundos (6 intentos x 5s)
+        const int MAX_RETRIES = 6;
 
         while (!acked && retries < MAX_RETRIES) {
-            ulTaskNotifyTake(pdTRUE, 0); // Limpiamos notificaciones previas
+            ulTaskNotifyTake(pdTRUE, 0);
             
             esp_ble_mesh_client_model_send_msg(
                 vendor_client.model, &ctx, ESP_BLE_MESH_VND_MODEL_OP_DATA_CHUNK,
@@ -236,24 +235,24 @@ for (uint16_t i = 1; i <= total_chunks; i++) {
                 TickType_t remaining_ticks = deadline - xTaskGetTickCount();
                 uint32_t notified = ulTaskNotifyTake(pdTRUE, remaining_ticks);
                 if (notified == 0) {
-                    break; /* Timeout del intento actual */
+                    break; 
                 }
                 if (last_data_ack_seq == i) {
                     acked  = true;
                     crc_ok = last_data_ack_ok;       
                     rssi_stats_add(&data_rssi_stats, last_data_ack_rssi);
-                    break; /* ACK recibido correctamente */
+                    break; 
                 }
             }
 
             if (!acked) {
                 retries++;
                 ESP_LOGW(TAG, "TIMEOUT: Chunk #%d/%d sin ACK. Reintento %d/%d...", i, total_chunks, retries, MAX_RETRIES);
-                vTaskDelay(pdMS_TO_TICKS(150)); /* Pausa crítica para permitir al stack limpiar buffers antes de reintentar */
+                vTaskDelay(pdMS_TO_TICKS(150)); 
             }
         }
 
-        /* Evaluación final tras los reintentos */
+    
         if (!acked) {
             chunk_lost++;
             ESP_LOGE(TAG, "PERDIDO: Chunk #%d/%d falló tras %d intentos (Timeout total muy alto).", i, total_chunks, MAX_RETRIES);
@@ -264,7 +263,7 @@ for (uint16_t i = 1; i <= total_chunks; i++) {
             bytes_ok += chunk_len;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(50)); /* Retardo entre chunks correctos para no saturar al receptor */
+        vTaskDelay(pdMS_TO_TICKS(50)); 
     }
 
     int64_t elapsed_us = esp_timer_get_time() - start;
@@ -299,7 +298,7 @@ static void run_ping_round(uint16_t round_size) {
             .seq_num = tx_count,
             .total_in_round = round_size,
             .timestamp = esp_timer_get_time(),
-            .last_rtt_ms = s_last_rtt_ms // AQUI SE HA MODIFICADO: ENVIAMOS LA LATENCIA AL GATEWAY
+            .last_rtt_ms = s_last_rtt_ms 
         };
 
         ulTaskNotifyTake(pdTRUE, 0); 
@@ -332,18 +331,12 @@ static void run_ping_round(uint16_t round_size) {
 static void ping_test_task(void *pvParameters) {
     vTaskDelay(2000 / portTICK_PERIOD_MS);
     
-    ESP_LOGI(TAG, "=== BENCHMARK INICIAL (una sola vez) ===");
     run_ping_round(TOTAL_PING_MESSAGES);
     run_data_transfer_test(DATA_TEST_SIZE_1KB,   "1KB");
     run_data_transfer_test(DATA_TEST_SIZE_10KB,  "10KB");
     run_data_transfer_test(DATA_TEST_SIZE_100KB, "100KB");
-    ESP_LOGI(TAG, "=== BENCHMARK INICIAL FINALIZADO -- entrando en modo continuo ===");
-
-    for (;;) {
-        run_ping_round(CONTINUOUS_PING_COUNT);
-        run_data_transfer_test(CONTINUOUS_DATA_TEST_SIZE, "1KB_continuo");
-        vTaskDelay(pdMS_TO_TICKS(CONTINUOUS_ROUND_INTERVAL_MS));
-    }
+   
+    vTaskDelete(NULL);
 }
 
 static void prov_complete(uint16_t net_idx, uint16_t addr, uint8_t flags, uint32_t iv_index) {

@@ -214,7 +214,7 @@ static void rx_task(void *arg)
                     s_exp_start_ms = now_ms();
                     s_exp_bytes_rx = 0;
                 }
-                s_exp_bytes_rx += DUMMY_EXPERIMENT_SIZE; // Sumamos los bytes recibidos
+                s_exp_bytes_rx += DUMMY_EXPERIMENT_SIZE; 
             }
             break;
 
@@ -228,7 +228,7 @@ static void rx_task(void *arg)
                 float real_throughput = 0.0f;
                 
                 if (duration_rx_ms > 0 && s_exp_bytes_rx > 0) {
-                    // (Bytes / 1000) para KB, (ms / 1000) para segundos -> KB/s
+                    
                     real_throughput = ((float)s_exp_bytes_rx / 1000.0f) / ((float)duration_rx_ms / 1000.0f);
                 }
 
@@ -240,13 +240,13 @@ static void rx_task(void *arg)
                 ESP_LOGW(TAG, " Throughput Acumulado (Root): %.2f KB/s", real_throughput);
                 ESP_LOGW(TAG, "====================================");
                 
-                // Sobrescribimos los valores locales del nodo con los reales del Root para MQTT
+                
                 exp->time_ms = duration_rx_ms;
                 exp->throughput = real_throughput;
                 
                 mqtt_publish_exp_result(pkt->hdr.src_mac, exp);
 
-                // Reiniciamos para el próximo experimento
+                
                 s_exp_bytes_rx = 0; 
             }
             break;

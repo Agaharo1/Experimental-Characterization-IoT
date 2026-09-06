@@ -17,7 +17,7 @@ MQTT_BROKER = "192.168.1.36"
 MQTT_PORT = 1883
 MQTT_TOPIC_BASE = f"iot/mesh/node/{DESTINATION_NODE.strip('!')}/metrics/experimentos"
 
-# Variables globales
+
 waiting_for_ack = False
 ack_received = False
 last_snr = 0.0
@@ -36,14 +36,14 @@ def ejecutar_experimento(interface, nombre, num_paquetes):
     global waiting_for_ack, ack_received, last_snr
     
     print(f"\n{'='*60}")
-    print(f"🚀 INICIANDO EXPERIMENTO: {nombre} ({num_paquetes} paquetes)")
+    print(f"INICIANDO EXPERIMENTO: {nombre} ({num_paquetes} paquetes)")
     print(f"{'='*60}")
     
     payload_data = "X" * PAYLOAD_SIZE
     paquetes_exitosos = 0
     lista_snr = []
     
-    # Inicia el cronómetro maestro del experimento
+
     tiempo_inicio_total = time.time()
     
     for i in range(num_paquetes):
@@ -60,7 +60,7 @@ def ejecutar_experimento(interface, nombre, num_paquetes):
                            portNum=256,
                            wantAck=True)
         
-        # Espera hasta 15 segundos por el ACK
+        
         while waiting_for_ack and (time.time() - tiempo_envio_paquete) < 15:
             time.sleep(0.1)
             
@@ -69,12 +69,12 @@ def ejecutar_experimento(interface, nombre, num_paquetes):
             latencia = (tiempo_llegada_ack - tiempo_envio_paquete) / 2
             throughput_paquete = PAYLOAD_SIZE / latencia if latencia > 0 else 0
             
-            print(f"  ✅ ACK: Latencia {latencia:.2f}s | Throughput {throughput_paquete:.2f} B/s | SNR: {last_snr} dB")
+            print(f"  ACK: Latencia {latencia:.2f}s | Throughput {throughput_paquete:.2f} B/s | SNR: {last_snr} dB")
             
             paquetes_exitosos += 1
             lista_snr.append(last_snr)
         else:
-            print("  ❌ Timeout: Paquete perdido.")
+            print("  Timeout: Paquete perdido.")
             waiting_for_ack = False
             
 
@@ -96,13 +96,9 @@ def ejecutar_experimento(interface, nombre, num_paquetes):
         
         topic = f"{MQTT_TOPIC_BASE}/{nombre.lower()}"
         mqtt_client.publish(topic, json.dumps(mqtt_payload))
-        # Quitado el print() de MQTT en cada ciclo para no saturarte la pantalla de texto,
-        # pero los datos sí se están enviando al servidor.
-        
-        # Pausa obligatoria por Duty Cycle antes de lanzar el siguiente
         time.sleep(1) 
         
-    print(f"\n🏁 FIN DEL EXPERIMENTO {nombre}")
+    print(f"\n FIN DEL EXPERIMENTO {nombre}")
     print(f"   Entregados: {paquetes_exitosos}/{num_paquetes}")
     print(f"   Tiempo: {tiempo_transcurrido:.2f}s | Throughput: {throughput_acumulado:.2f} B/s | SNR: {snr_promedio_acumulado:.2f} dB")
 
@@ -113,7 +109,7 @@ def main():
         mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
         mqtt_client.loop_start()
     except Exception as e:
-        print(f"❌ Error MQTT: {e}")
+        print(f" Error MQTT: {e}")
         return
 
     print("Conectando al Nodo Base por USB...")
@@ -125,7 +121,6 @@ def main():
             ejecutar_experimento(interface, nombre, num_paquetes)
             
             if nombre != "100_KB":
-                print("⏳ Esperando 15 segundos para que la radio descanse...")
                 time.sleep(15)
 
     except KeyboardInterrupt:

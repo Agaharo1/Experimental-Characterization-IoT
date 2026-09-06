@@ -76,7 +76,7 @@ bool mqtt_is_connected(void) {
     return (xEventGroupGetBits(s_evt_group) & MQTT_CONNECTED_BIT) != 0;
 }
 
-// AQUI SE HA MODIFICADO: AÑADIDOS PARAMETROS PDR Y LATENCIA AL JSON
+
 void mqtt_publish_ping_result(uint16_t node_addr,
                                uint16_t received, uint16_t expected,
                                float pdr,
@@ -110,7 +110,7 @@ void mqtt_publish_ping_result(uint16_t node_addr,
     }
 }
 
-// AQUI SE HA MODIFICADO: AÑADIDOS PARAMETROS PDR Y THROUGHPUT AL JSON
+
 void mqtt_publish_transfer_result(uint16_t node_addr,
                                    uint32_t total_bytes_observed,
                                    uint16_t total_chunks, uint16_t received_chunks,
